@@ -13,17 +13,27 @@ import sys, wave
 import galois_field as gf
 from efm import EFM
 
+goodsym = 0
+
 def analyze_frame(frame):
     assert len(frame) == 588 # verify that each frame is 588 bits long
     sync24 = frame[0:24]
     merge3 = frame[24:27] # ignore
     assert sync24 == "100000000001000000000010"
+    
+    global goodsym
 
     framedata = []
     for i in range(33):
         channel14 = frame[27+17*i:41+17*i]
         merge3    = frame[41+17*i:44+17*i] # ignore
-        data8 = EFM[channel14]
+        data8 = 0
+        try:
+                data8 = EFM[channel14]
+                goodsym = goodsym + 1 
+        except KeyError:
+                print("argh-data")
+                data8 = 0
         framedata.append(data8)
 
     return (framedata[0], framedata[1:])
@@ -82,6 +92,10 @@ def analyze_control_stream(control_stream):
         else:
             assert control_stream[0] == 'SYNC0'
             assert control_stream[1] == 'SYNC1'
+
+            for i in range(2, len(control_stream)):
+                if (control_stream[i] == 'SYNC0') or (control_stream[i] == 'SYNC1'):
+                    control_stream[i] = 0
 
             control_sector = control_stream[2:98]
             control_stream = control_stream[98:]
@@ -147,11 +161,16 @@ def verify_data_stream(data):
         for hp_row in range(4):
             z = gf.zero
             for j in range(32):
+                if (data[i-p_delay[j]][j] == 'SYNC1') or (data[i-p_delay[j]][j] == 'SYNC0'):
+                     data[i-p_delay[j]][j] = 0
                 z = gf.add(z, gf.multiply(gf.power(gf.alpha, hp_row*(31-j)), data[i-p_delay[j]][j]^invert[j]))
             z_list.append(z)    
         if z_list != [gf.zero, gf.zero, gf.zero, gf.zero]:
             print("P PARITY: ERROR DETECTED IN FRAME # {}".format(i))
             errorsP = errorsP + 1
+        else:
+            print("P PARITY: FRAME # {} GOOD".format(i))
+
 
     # check C2 a.k.a. Q-parity
     print("Checking C2 / Q parity ...")
@@ -161,17 +180,26 @@ def verify_data_stream(data):
         for hq_row in range(4):
             z = gf.zero
             for j in range(28):
+                if (data[i-q_delay[j]][j] == 'SYNC1') or (data[i-q_delay[j]][j] == 'SYNC0'):
+                     data[i-q_delay[j]][j] = 0
                 z  = gf.add(z, gf.multiply(gf.power(gf.alpha, hq_row*(27-j)), data[i-q_delay[j]][j]^invert[j]))
             z_list.append(z)
         if z_list!= [gf.zero, gf.zero, gf.zero, gf.zero]:
             print("Q PARITY: ERROR DETECTED IN FRAME # {}".format(i))
             errorsQ = errorsQ + 1
+        else:
+            print("Q PARITY: FRAME # {} GOOD".format(i))
 
     return (errorsP, errorsQ)
 
 def extract_audio_stream(data):
 
     audio_data = []
+    
+    for i in range(105, len(data)):
+        for j in range(0, 28):
+            if (data[i - 105][j] == 'SYNC1') or (data[i - 105][j] == 'SYNC2'):
+                data[i - 105][j] = 0
 
     for i in range(105, len(data)):
 
@@ -239,6 +267,8 @@ def main():
     control_stream = []
     data_stream    = []
 
+    fcount = 0
+
     z = 0
     while True:
         z = delta_signal.find("100000000001000000000010", z)
@@ -250,7 +280,12 @@ def main():
             (control, data) = analyze_frame(frame)
             control_stream.append(control)
             data_stream.append(data)
+            fcount = fcount + 1
         z = z + 588
+
+    global goodsym
+    print(goodsym, " good symbols")
+    print(fcount, " frames found")
 
     analyze_control_stream(control_stream)
 
